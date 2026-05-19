@@ -63,6 +63,10 @@ static void window_unload(Window *window) {
 
 void ui_spinner_init(void) {
   s_window = window_create();
+  // Opaque white background so transitioning to this window from another
+  // (idle or response) fully overwrites the previous frame on the
+  // memory LCD. Without it, ghost text from the prior window persists.
+  window_set_background_color(s_window, GColorWhite);
   window_set_click_config_provider(s_window, click_config_provider);
   window_set_window_handlers(s_window, (WindowHandlers){
     .load = window_load,

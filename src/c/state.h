@@ -18,10 +18,6 @@ void state_deinit(void);
 AppState state_current(void);
 void state_set(AppState next);
 
-int state_turn_count(void);
-void state_increment_turn(void);
-void state_reset_turns(void);
-
 OwuiErrorCode state_last_error(void);
 void state_set_error(OwuiErrorCode code);
 
@@ -31,13 +27,26 @@ void state_set_error(OwuiErrorCode code);
 int state_dictation_status(void);
 void state_set_dictation_status(int status);
 
-const char *state_response_text(void);
-void state_set_response(char *owned_text);  // takes ownership; freed on next set or deinit
+// Conversation history. Each Turn is one user utterance + AI response pair.
+// The ring is FIFO-capped at MAX_TURNS; appending past that evicts the
+// oldest. ui_response.c reads from this ring to render the chat-bubble
+// scroll view.
+#define MAX_TURNS 8
 
-// Latest user utterance for the response window's chat-bubble layout.
-// Stored as a copy; safe to read after the dictation buffer is invalidated.
-const char *state_user_text(void);
-void state_set_user_text(const char *text);
+typedef struct {
+  char *user;  // owned, malloc'd; never NULL after a committed turn
+  char *ai;    // owned, malloc'd; never NULL after a committed turn
+} Turn;
+
+int         state_turn_count(void);
+const Turn *state_turn_at(int idx);  // 0 = oldest of the visible window
+
+// User text is staged in on_dictation_done before the AI response arrives;
+// state_commit_turn moves it + the response into the ring as one Turn.
+void        state_set_pending_user_text(const char *text);
+const char *state_pending_user_text(void);
+void        state_commit_turn(char *owned_ai_text);  // takes ownership of ai_text
+void        state_clear_turns(void);
 
 // Font size for the chat-bubble text, pushed from PKJS config via the
 // FontSize AppMessage key. Default = 24 (medium); 28 is the large option.

@@ -6,15 +6,24 @@
 #include <pebble.h>
 #include <string.h>
 
-// Chat-bubble response window.
-// Layout: two stacked bubbles inside a ScrollLayer — the user's dictated text
-// on top (one accent color) and the AI's response below (another accent
-// color). Each bubble is a custom Layer that draws a rounded rect border, with
-// a TextLayer child for the word-wrapped content.
+// Chat-bubble response window. Layout: an alternating sequence of
+// right-aligned blue user bubbles and left-aligned orange AI bubbles, one
+// pair per Turn in the state ring, inside a ScrollLayer. UP/DOWN scroll
+// through the history; SELECT starts a follow-up; BACK returns to IDLE.
 
 static Window *s_window = NULL;
 static ScrollLayer *s_scroll_layer = NULL;
-static bool s_back_long_just_fired = false;
+
+// Touch-based swipe scrolling state. We measure finger displacement
+// between Touchdown and Liftoff (ignoring intermediate PositionUpdates)
+// and apply that delta to the scroll offset on Liftoff. This keeps the
+// implementation insensitive to the platform's PositionUpdate sample rate
+// and avoids any visible lag from real-time tracking. Magnitude-proportional:
+// a longer swipe scrolls farther.
+static int16_t s_touch_start_y;
+static int16_t s_touch_start_offset_y;
+static bool    s_touch_dragging;
+#define TOUCH_TAP_THRESHOLD_PX 8  // ignore vertical movements smaller than this
 
 typedef struct {
   Layer *border;
@@ -22,8 +31,10 @@ typedef struct {
   GColor border_color;
 } Bubble;
 
-static Bubble s_user_bubble;
-static Bubble s_ai_bubble;
+// One user bubble + one AI bubble per turn slot. Hidden slots collapse to
+// a zero-size frame so they don't paint anything.
+static Bubble s_user_bubbles[MAX_TURNS];
+static Bubble s_ai_bubbles[MAX_TURNS];
 
 #define BUBBLE_RADIUS       6
 #define BUBBLE_BORDER       2
@@ -34,26 +45,32 @@ static Bubble s_ai_bubble;
 // glyphs like "y", "g", "p" aren't clipped.
 #define BUBBLE_PAD_TOP      0
 #define BUBBLE_PAD_BOTTOM   2
-#define BUBBLE_TEXT_Y_TRIM  6     // shift text upward to absorb the ascent gap
-#define BUBBLE_DESCENDER    6     // extra height added to the text frame for descenders
-#define BUBBLE_GAP_Y        6     // vertical gap between user and AI bubbles
-#define BUBBLE_MARGIN_X     4     // left/right margin inside the scroll layer
+#define BUBBLE_TEXT_Y_TRIM  6
+#define BUBBLE_DESCENDER    6
+#define BUBBLE_GAP_Y        6     // gap between adjacent bubbles (within or across turns)
+#define BUBBLE_MARGIN_X     4
 #define BUBBLE_TOP_MARGIN   4
 #define BUBBLE_BOTTOM_PAD   6
-#define MAX_TEXT_HEIGHT     2000  // upper bound for content size measurement
+#define MAX_TEXT_HEIGHT     2000
 
 static void draw_bubble(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
-  Bubble *bubble =
-      (layer == s_user_bubble.border) ? &s_user_bubble : &s_ai_bubble;
-  graphics_context_set_stroke_color(ctx, bubble->border_color);
+  // The border color lives in the Bubble struct that owns this layer. We
+  // located it by scanning the user/ai pools since the SDK layer doesn't
+  // give us a back-pointer.
+  GColor color = GColorBlack;
+  for (int i = 0; i < MAX_TURNS; i++) {
+    if (s_user_bubbles[i].border == layer) { color = s_user_bubbles[i].border_color; break; }
+    if (s_ai_bubbles[i].border   == layer) { color = s_ai_bubbles[i].border_color;   break; }
+  }
+  graphics_context_set_stroke_color(ctx, color);
   graphics_context_set_stroke_width(ctx, BUBBLE_BORDER);
   graphics_draw_round_rect(ctx, GRect(0, 0, b.size.w, b.size.h), BUBBLE_RADIUS);
 }
 
 static void init_bubble(Bubble *bubble, GColor border_color, GFont font) {
   bubble->border_color = border_color;
-  bubble->border = layer_create(GRect(0, 0, 1, 1));  // resized in apply_text
+  bubble->border = layer_create(GRect(0, 0, 0, 0));
   layer_set_update_proc(bubble->border, draw_bubble);
 
   bubble->text = text_layer_create(GRect(0, 0, 1, 1));
@@ -73,19 +90,21 @@ static void destroy_bubble(Bubble *bubble) {
   bubble->border = NULL;
 }
 
-// Sizes a bubble to fit `text` within `max_width`, places it at `align_right`
-// (user style) or left (AI style) within the scroll layer of width
-// `scroll_w`, and returns its total height.
+static void hide_bubble(Bubble *bubble) {
+  layer_set_frame(bubble->border, GRect(0, 0, 0, 0));
+}
+
+// Sizes a bubble to fit `text` within the scroll layer's `scroll_w`, places
+// it at `y` aligned right (user) or left (AI), returns its total height.
 static int16_t layout_bubble(Bubble *bubble, const char *text,
                              int16_t y, int16_t scroll_w, bool align_right) {
   text_layer_set_text(bubble->text, text ? text : "");
   int16_t max_width = scroll_w - 2 * BUBBLE_MARGIN_X;
   int16_t inner_w_max = max_width - 2 * (BUBBLE_PAD_X + BUBBLE_BORDER);
-  // Probe with a tall layout to get the wrapped content size.
   text_layer_set_size(bubble->text, GSize(inner_w_max, MAX_TEXT_HEIGHT));
   GSize used = text_layer_get_content_size(bubble->text);
   int16_t inner_w = used.w;
-  int16_t inner_h = used.h + BUBBLE_DESCENDER;  // give descenders room
+  int16_t inner_h = used.h + BUBBLE_DESCENDER;
   int16_t border_w = inner_w + 2 * (BUBBLE_PAD_X + BUBBLE_BORDER);
   if (border_w > max_width) border_w = max_width;
   int16_t border_h = inner_h - BUBBLE_TEXT_Y_TRIM
@@ -98,8 +117,6 @@ static int16_t layout_bubble(Bubble *bubble, const char *text,
   text_layer_set_size(
       bubble->text,
       GSize(border_w - 2 * (BUBBLE_PAD_X + BUBBLE_BORDER), inner_h));
-  // Within the bubble, align user text right and AI text left for a chat-style
-  // visual cue beyond just the border color.
   text_layer_set_text_alignment(
       bubble->text, align_right ? GTextAlignmentRight : GTextAlignmentLeft);
   layer_set_frame(
@@ -113,64 +130,110 @@ static int16_t layout_bubble(Bubble *bubble, const char *text,
 static void apply_text(void) {
   if (!s_scroll_layer) return;
 
-  // Re-apply current font choice on every render (config may have changed
-  // mid-session via webviewclosed → FontSize push).
   GFont font = fonts_get_system_font(state_font_key());
-  text_layer_set_font(s_user_bubble.text, font);
-  text_layer_set_font(s_ai_bubble.text, font);
-
   GRect scroll_bounds = layer_get_bounds(scroll_layer_get_layer(s_scroll_layer));
   int16_t scroll_w = scroll_bounds.size.w;
+  int16_t scroll_h = scroll_bounds.size.h;
 
   int16_t y = BUBBLE_TOP_MARGIN;
-  const char *user_text = state_user_text();
-  if (user_text && user_text[0]) {
-    y += layout_bubble(&s_user_bubble, user_text, y, scroll_w, true /*right*/);
-    y += BUBBLE_GAP_Y;
-  } else {
-    // Hide the user bubble by collapsing it to zero size.
-    layer_set_frame(s_user_bubble.border, GRect(0, 0, 0, 0));
+  int n = state_turn_count();
+  for (int i = 0; i < MAX_TURNS; i++) {
+    Bubble *u = &s_user_bubbles[i];
+    Bubble *a = &s_ai_bubbles[i];
+    text_layer_set_font(u->text, font);
+    text_layer_set_font(a->text, font);
+    if (i < n) {
+      const Turn *t = state_turn_at(i);
+      if (t && t->user && t->user[0]) {
+        y += layout_bubble(u, t->user, y, scroll_w, /*align_right=*/true);
+        y += BUBBLE_GAP_Y;
+      } else {
+        hide_bubble(u);
+      }
+      if (t && t->ai) {
+        y += layout_bubble(a, t->ai, y, scroll_w, /*align_right=*/false);
+        y += BUBBLE_GAP_Y;
+      } else {
+        hide_bubble(a);
+      }
+    } else {
+      hide_bubble(u);
+      hide_bubble(a);
+    }
   }
+  int16_t content_h = (n > 0) ? (y - BUBBLE_GAP_Y + BUBBLE_BOTTOM_PAD)
+                              : scroll_h;  // empty = exact fit, nothing to scroll
+  scroll_layer_set_content_size(s_scroll_layer, GSize(scroll_w, content_h));
+  // Auto-scroll to the bottom whenever new content arrives, so the latest
+  // turn is visible without the user having to scroll first.
+  int16_t bottom_offset = (content_h > scroll_h) ? -(content_h - scroll_h) : 0;
+  scroll_layer_set_content_offset(s_scroll_layer, GPoint(0, bottom_offset), true);
+}
 
-  const char *ai_text = state_response_text();
-  y += layout_bubble(&s_ai_bubble, ai_text ? ai_text : "",
-                     y, scroll_w, false /*left*/);
-  y += BUBBLE_BOTTOM_PAD;
-
-  scroll_layer_set_content_size(s_scroll_layer, GSize(scroll_w, y));
-  scroll_layer_set_content_offset(s_scroll_layer, GPoint(0, 0), false);
+static void on_touch_event(const TouchEvent *event, void *ctx) {
+  if (!s_scroll_layer) return;
+  switch (event->type) {
+    case TouchEvent_Touchdown: {
+      GPoint cur = scroll_layer_get_content_offset(s_scroll_layer);
+      s_touch_start_y = event->y;
+      s_touch_start_offset_y = cur.y;
+      s_touch_dragging = true;
+      APP_LOG(APP_LOG_LEVEL_INFO, "touch: down (%d,%d) offset_y=%d",
+              event->x, event->y, cur.y);
+      break;
+    }
+    case TouchEvent_PositionUpdate:
+      // Intentionally a no-op for scrolling — we wait for Liftoff so the
+      // implementation doesn't depend on a high PositionUpdate sample
+      // rate. Logged at debug level only so a flood doesn't drown
+      // pebble-logs out.
+      break;
+    case TouchEvent_Liftoff: {
+      int16_t dy = s_touch_dragging ? event->y - s_touch_start_y : 0;
+      APP_LOG(APP_LOG_LEVEL_INFO, "touch: up (%d,%d) dy=%d dragging=%d",
+              event->x, event->y, dy, (int)s_touch_dragging);
+      if (!s_touch_dragging) break;
+      s_touch_dragging = false;
+      if (dy > -TOUCH_TAP_THRESHOLD_PX && dy < TOUCH_TAP_THRESHOLD_PX) {
+        break;  // tap (no meaningful vertical motion) — don't scroll
+      }
+      // Pebble scroll-layer offsets are NEGATIVE as content moves up.
+      // Adding dy directly means swipe-down (finger moves down, dy > 0)
+      // scrolls content downward (offset increases toward 0).
+      scroll_layer_set_content_offset(s_scroll_layer,
+          GPoint(0, s_touch_start_offset_y + dy), true);
+      break;
+    }
+  }
 }
 
 static void on_select(ClickRecognizerRef rec, void *ctx) {
-  // Follow-up turn.
   state_set(STATE_DICTATING);
   dictation_start();
 }
 
 static void on_back(ClickRecognizerRef rec, void *ctx) {
-  if (s_back_long_just_fired) {
-    s_back_long_just_fired = false;
-    return;  // suppress the trailing single_click after a long-click
-  }
   state_set(STATE_IDLE);
 }
 
-static void on_back_long(ClickRecognizerRef rec, void *ctx) {
-  s_back_long_just_fired = true;
-  transport_send_reset();
-  state_reset_turns();
-  state_set(STATE_IDLE);
-}
-
-static void on_back_long_up(ClickRecognizerRef rec, void *ctx) { }
-
-// Adds SELECT and BACK on top of the scroll layer's UP/DOWN config.
-// Set via window_set_click_config_provider() *after* the scroll layer is
-// wired into the window in window_load.
 static void click_config_provider(void *ctx) {
+  // UP/DOWN drive the scroll layer's built-in handlers. Setting the click
+  // context binds them to our specific scroll layer; without that, the
+  // exposed handlers don't know which layer to move.
+  window_set_click_context(BUTTON_ID_UP, s_scroll_layer);
+  window_set_click_context(BUTTON_ID_DOWN, s_scroll_layer);
+  window_single_click_subscribe(BUTTON_ID_UP,
+      (ClickHandler)scroll_layer_scroll_up_click_handler);
+  window_single_click_subscribe(BUTTON_ID_DOWN,
+      (ClickHandler)scroll_layer_scroll_down_click_handler);
+  // Repeat-on-hold so long presses scroll continuously.
+  window_single_repeating_click_subscribe(BUTTON_ID_UP, 80,
+      (ClickHandler)scroll_layer_scroll_up_click_handler);
+  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 80,
+      (ClickHandler)scroll_layer_scroll_down_click_handler);
+
   window_single_click_subscribe(BUTTON_ID_SELECT, on_select);
   window_single_click_subscribe(BUTTON_ID_BACK, on_back);
-  window_long_click_subscribe(BUTTON_ID_BACK, 700, on_back_long, on_back_long_up);
 }
 
 static void window_load(Window *window) {
@@ -178,40 +241,63 @@ static void window_load(Window *window) {
   GRect bounds = layer_get_bounds(root);
 
   s_scroll_layer = scroll_layer_create(bounds);
+  // The SDK's shadow indicator overlaps content at the bottom edge in a
+  // way that competes with our bubbles — hide it.
+  scroll_layer_set_shadow_hidden(s_scroll_layer, true);
 
-  // Font selection lives in PKJS config; transport pushes it down via the
-  // FontSize key. Until that arrives we use the default (medium).
   GFont font = fonts_get_system_font(state_font_key());
-  // emery has color; pick contrasting bubble borders.
-  init_bubble(&s_user_bubble,
-              PBL_IF_COLOR_ELSE(GColorVividCerulean, GColorBlack), font);  // blue = user
-  init_bubble(&s_ai_bubble,
-              PBL_IF_COLOR_ELSE(GColorOrange, GColorBlack), font);          // orange = AI
-
-  scroll_layer_add_child(s_scroll_layer, s_user_bubble.border);
-  scroll_layer_add_child(s_scroll_layer, s_ai_bubble.border);
+  // emery has color; pick contrasting bubble borders. All user slots share
+  // one color, all AI slots share another, so they look like a coherent
+  // chat thread.
+  GColor user_color = PBL_IF_COLOR_ELSE(GColorVividCerulean, GColorBlack);
+  GColor ai_color   = PBL_IF_COLOR_ELSE(GColorOrange,        GColorBlack);
+  for (int i = 0; i < MAX_TURNS; i++) {
+    init_bubble(&s_user_bubbles[i], user_color, font);
+    init_bubble(&s_ai_bubbles[i],   ai_color,   font);
+    scroll_layer_add_child(s_scroll_layer, s_user_bubbles[i].border);
+    scroll_layer_add_child(s_scroll_layer, s_ai_bubbles[i].border);
+  }
   layer_add_child(root, scroll_layer_get_layer(s_scroll_layer));
 
-  // Order matters: textbook pattern (call
-  // scroll_layer_set_click_config_onto_window from inside our
-  // click_config_provider) crashes the emery firmware in this SDK. Setting
-  // the scroll layer's click config directly, then layering our SELECT/BACK
-  // provider on top, avoids the re-entrant click setup that triggers the bug.
-  scroll_layer_set_click_config_onto_window(s_scroll_layer, s_window);
+  // Replace the scroll layer's default click config (which only handles
+  // UP/DOWN) with ours, which adds SELECT/BACK while keeping UP/DOWN.
   window_set_click_config_provider(s_window, click_config_provider);
+
+  // Subscribe to touch events unconditionally. The SDK docs say "the
+  // touch sensor is enabled while subscribed" — that means the call
+  // itself flips the sensor on. We previously gated this on
+  // touch_service_is_enabled(), but that returns false until something
+  // is subscribed, creating a chicken-and-egg that prevented swipe
+  // scroll from ever firing on hardware. On platforms without a
+  // touchscreen the subscribe is harmless (no events will be delivered).
+  touch_service_subscribe(on_touch_event, NULL);
+  APP_LOG(APP_LOG_LEVEL_INFO, "touch: subscribed (is_enabled=%d)",
+          (int)touch_service_is_enabled());
 
   apply_text();
 }
 
 static void window_unload(Window *window) {
-  destroy_bubble(&s_user_bubble);
-  destroy_bubble(&s_ai_bubble);
+  // Unconditionally unsubscribe — safe to call even if we never
+  // subscribed (the SDK handles the unbalanced case as a no-op). This
+  // releases the touch sensor when the response window isn't on top.
+  touch_service_unsubscribe();
+  s_touch_dragging = false;
+  for (int i = 0; i < MAX_TURNS; i++) {
+    destroy_bubble(&s_user_bubbles[i]);
+    destroy_bubble(&s_ai_bubbles[i]);
+  }
   if (s_scroll_layer) scroll_layer_destroy(s_scroll_layer);
   s_scroll_layer = NULL;
 }
 
 void ui_response_init(void) {
   s_window = window_create();
+  // Memory-LCD pixels persist whatever was last written; declare an
+  // explicit white background so transitions into this window fully
+  // overwrite the previous window's contents (no ghost text from idle/
+  // spinner footers).
+  window_set_background_color(s_window, GColorWhite);
   window_set_window_handlers(s_window, (WindowHandlers){
     .load = window_load,
     .unload = window_unload,
@@ -225,14 +311,11 @@ void ui_response_deinit(void) {
   }
 }
 
-void ui_response_show(const char *text) {
-  // text is unused; both AI response and user text are read from state at
-  // layout time (state_response_text(), state_user_text()).
-  (void)text;
+void ui_response_show(void) {
   if (!window_stack_contains_window(s_window)) {
-    window_stack_push(s_window, true);  // window_load will apply_text()
+    window_stack_push(s_window, true);  // window_load runs apply_text()
   } else {
-    apply_text();  // already on stack — re-layout for a follow-up turn
+    apply_text();  // re-layout for a follow-up turn
   }
 }
 

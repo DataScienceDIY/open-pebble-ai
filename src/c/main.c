@@ -20,7 +20,9 @@ static OwuiErrorCode dictation_status_to_error(int status) {
 }
 
 static void on_dictation_done(const char *utterance) {
-  state_set_user_text(utterance);  // snapshot for the response window
+  // Stage the user text on the watch side; on_response will commit a
+  // {user, ai} Turn into the conversation ring once the reply arrives.
+  state_set_pending_user_text(utterance);
   state_set(STATE_SENDING);
   transport_send_utterance(utterance);
   state_set(STATE_WAITING);
@@ -40,8 +42,7 @@ static void on_dictation_fail(int status) {
 }
 
 static void on_response(char *owned_response) {
-  state_set_response(owned_response);
-  state_increment_turn();
+  state_commit_turn(owned_response);  // takes ownership; pairs with pending user text
   state_set(STATE_SHOWING);
 }
 
@@ -57,6 +58,12 @@ static void init(void) {
   dictation_init(on_dictation_done, on_dictation_fail);
   transport_init(on_response, on_transport_error);
   state_init();
+
+  // Tell PKJS to drop any leftover conversation array from a previous
+  // session. The watch-side turn ring is already empty after state_init;
+  // this keeps the two in sync so app-relaunch = fresh chat regardless of
+  // how the companion app preserves PKJS state.
+  transport_send_reset();
 }
 
 static void deinit(void) {

@@ -4,19 +4,34 @@
 var CHUNK_SIZE = 2048;
 var MAX_CHUNKS = 16;
 
-// Replace or drop characters that Pebble's system fonts can't render.
-// LLMs commonly emit smart quotes, em-dashes, ellipses, bullets, and various
-// Unicode spaces -- all show up as empty boxes on the watch. Apply targeted
-// ASCII-equivalent replacements first (preserving meaning), then strip
-// anything still outside ASCII printable + LF + tab to catch the long tail.
-// Ranges are written as \uXXXX escapes so this source file stays ASCII-safe.
-// Strip reasoning-model "Harmony" control tokens. gpt-oss / o1 / similar
-// reasoning models structure their output with `<|channel|>analysis<|message|>...`
-// and `<|channel|>final<|message|>...` markers; servers usually unwrap them
-// but some (lmstudio.openai passthrough, raw vLLM) don't, leaving the raw
-// tokens in `message.content`. Prefer the `final` channel if present; else
+// --- Sanitization pipeline ---------------------------------------------
+// LLM-emitted text is messy in predictable ways. The full pipeline runs
+// every reply through, in order:
+//   1. stripHarmonyTokens   — gpt-oss / o1 channel markers
+//   2. unwrapJsonContent    — inner JSON some models emit as their reply
+//   3. stripMarkdown        — ** _ # > ` and list bullets
+//   4. (existing) Unicode replacements + ASCII-printable strip + trim
+//
+// Each stage is a no-op when its trigger isn't present, so clean models
+// (Gemma in our testbench data) pass through with only the Unicode pass
+// touching them.
+//
+// FUTURE: if this pipeline grows enough stages that "what to apply" becomes
+// per-model knowledge — e.g. one model needs JSON unwrap but trips on
+// stripMarkdown, another emits a wrapper format we don't recognize yet —
+// add a model-recognition step that maps the configured model ID to a
+// sanitizer profile (set of stages + their parameters), and run only the
+// stages that profile selects. The config page already collects the model
+// ID; the watch->JS plumbing for FontSize shows the pattern for a similar
+// per-config dispatch on the watch side. Today the every-model pipeline
+// is cheap enough that the generic approach wins on simplicity.
+
+// gpt-oss / o1-style reasoning models structure their output with
+// `<|channel|>analysis<|message|>...` and `<|channel|>final<|message|>...`
+// markers. Servers usually unwrap them but some don't (lmstudio.openai
+// passthrough, raw vLLM). Prefer the `final` channel if present; else
 // take everything after the LAST `<|message|>` (the trailing content the
-// model wanted us to display) and strip any remaining `<|...|>` markers.
+// model wanted us to display) and drop any remaining `<|...|>` markers.
 function stripHarmonyTokens(text) {
   if (typeof text !== 'string') return text;
   if (text.indexOf('<|') === -1) return text;
@@ -27,18 +42,80 @@ function stripHarmonyTokens(text) {
   return text.replace(/<\|[^|]*\|>/g, '').trim();
 }
 
+// After Harmony stripping, gpt-oss sometimes leaves an inner JSON payload
+// like `{"response":"You told me forty-two."}` or
+// `{"role":"assistant","content":"Clouds drift..."}`. On the watch the
+// user reads the literal JSON, which is worse than the wrapper was. If
+// the remaining content parses as JSON and has a `content` or `response`
+// string field, unwrap it. Otherwise leave the text alone — many normal
+// responses contain JSON-shaped data legitimately (e.g. recipes,
+// code snippets).
+function unwrapJsonContent(text) {
+  if (typeof text !== 'string') return text;
+  var trimmed = text.trim();
+  if (trimmed.length < 2 || trimmed[0] !== '{' || trimmed[trimmed.length - 1] !== '}') {
+    return text;
+  }
+  try {
+    var obj = JSON.parse(trimmed);
+    if (obj && typeof obj === 'object') {
+      if (typeof obj.content === 'string')  return obj.content;
+      if (typeof obj.response === 'string') return obj.response;
+    }
+  } catch (e) {
+    // Not JSON; leave the text as-is.
+  }
+  return text;
+}
+
+// Strip Markdown markup that Pebble fonts render literally. gpt-oss
+// emitted `**bold**` in ~40% of testbench replies despite a brevity-
+// focused system prompt; other models in the data didn't. Removes the
+// markers but preserves the content so meaning survives.
+function stripMarkdown(text) {
+  if (typeof text !== 'string') return text;
+  return text
+    // Fenced code blocks ```lang\n ... ```  ->  inner only
+    .replace(/```[a-zA-Z0-9_+-]*\n?([\s\S]*?)```/g, '$1')
+    // Inline code `x`  ->  x
+    .replace(/`([^`\n]+)`/g, '$1')
+    // Bold ** ** / __ __  ->  inner
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1')
+    // Italic * * / _ _ -> inner (anchored so we don't eat single * in code)
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1$2')
+    .replace(/(^|[^_\w])_([^_\n]+)_(?!_)/g, '$1$2')
+    // Markdown links [text](url)  ->  text
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    // Line-anchored: leading ATX headers, blockquotes, list bullets
+    .replace(/^#{1,6}[ \t]+/gm, '')
+    .replace(/^>[ \t]?/gm, '')
+    .replace(/^[ \t]*[-*+][ \t]+/gm, '')
+    .replace(/^[ \t]*\d+\.[ \t]+/gm, '');
+}
+
+// Replace or drop characters that Pebble's system fonts can't render.
+// Targeted ASCII-equivalents first; then strip anything still outside
+// ASCII printable + LF + tab to catch the long tail. Final trim removes
+// leading blank lines that qwen ("\n\n") and nemotron ("\n") always
+// prepend, plus any whitespace exposed by the drop pass.
 function sanitizeForPebble(text) {
   if (typeof text !== 'string') return text;
   text = stripHarmonyTokens(text);
+  text = unwrapJsonContent(text);
+  text = stripMarkdown(text);
   return text
     .replace(/[‐-―−]/g, '-')      // hyphens / en-em dashes / minus
     .replace(/[‘-‛]/g, "'")            // curly single quotes
     .replace(/[“-‟]/g, '"')            // curly double quotes
     .replace(/…/g, '...')                   // horizontal ellipsis
     .replace(/[•‣●◦]/g, '*') // bullets
-    .replace(/[  -   　]/g, ' ') // unicode spaces
-    .replace(/[^\x09\x0A\x20-\x7E]/g, '');       // drop everything else
+    .replace(/[  -   　]/g, ' ') // unicode spaces
+    .replace(/[^\x09\x0A\x20-\x7E]/g, '')        // drop everything else
+    .trim();
 }
+
+// --- Chunking + ack-gated send -----------------------------------------
 
 // Split a string into chunks of <= maxBytes bytes when UTF-8 encoded,
 // without splitting in the middle of a multibyte codepoint.
@@ -160,6 +237,8 @@ module.exports = {
   splitUtf8: splitUtf8,
   sanitizeForPebble: sanitizeForPebble,
   stripHarmonyTokens: stripHarmonyTokens,
+  unwrapJsonContent: unwrapJsonContent,
+  stripMarkdown: stripMarkdown,
   sendChunked: sendChunked,
   sendErrorCode: sendErrorCode,
 };

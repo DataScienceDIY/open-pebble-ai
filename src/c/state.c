@@ -7,12 +7,30 @@
 #include <stdlib.h>
 
 static AppState s_state = STATE_IDLE;
-static int s_turn = 0;
 static OwuiErrorCode s_last_error = ERR_NONE;
-static char *s_response = NULL;
-static char *s_user_text = NULL;
 static FontChoice s_font = FONT_MEDIUM;
 static int s_dictation_status = 0;
+
+// Conversation history: FIFO ring of committed turns + a staging buffer
+// for the in-flight user utterance (between on_dictation_done and
+// on_response). When the ring is full a new commit evicts the oldest.
+static Turn s_turns[MAX_TURNS];
+static int  s_turn_count = 0;     // 0..MAX_TURNS
+static char *s_pending_user = NULL;
+
+static char *dup_str(const char *src) {
+  if (!src) return NULL;
+  size_t n = strlen(src);
+  char *out = malloc(n + 1);
+  if (!out) return NULL;
+  memcpy(out, src, n + 1);
+  return out;
+}
+
+static void free_turn(Turn *t) {
+  if (t->user) { free(t->user); t->user = NULL; }
+  if (t->ai)   { free(t->ai);   t->ai   = NULL; }
+}
 
 static void update_ui_for_state(AppState s) {
   // Each state owns one window. Pop the others to keep the window stack
@@ -38,28 +56,24 @@ static void update_ui_for_state(AppState s) {
       break;
     case STATE_SHOWING:
       ui_spinner_hide();
-      ui_response_show(s_response ? s_response : "");
+      ui_response_show();
       break;
   }
 }
 
 void state_init(void) {
   s_state = STATE_IDLE;
-  s_turn = 0;
   s_last_error = ERR_NONE;
-  s_response = NULL;
+  s_turn_count = 0;
+  memset(s_turns, 0, sizeof(s_turns));
+  s_pending_user = NULL;
   update_ui_for_state(s_state);
 }
 
 void state_deinit(void) {
-  if (s_response) {
-    free(s_response);
-    s_response = NULL;
-  }
-  if (s_user_text) {
-    free(s_user_text);
-    s_user_text = NULL;
-  }
+  for (int i = 0; i < MAX_TURNS; i++) free_turn(&s_turns[i]);
+  s_turn_count = 0;
+  if (s_pending_user) { free(s_pending_user); s_pending_user = NULL; }
 }
 
 AppState state_current(void) { return s_state; }
@@ -83,42 +97,55 @@ void state_set(AppState next) {
   update_ui_for_state(next);
 }
 
-int state_turn_count(void) { return s_turn; }
-void state_increment_turn(void) { s_turn++; }
-void state_reset_turns(void) { s_turn = 0; }
-
 OwuiErrorCode state_last_error(void) { return s_last_error; }
 void state_set_error(OwuiErrorCode code) {
   s_last_error = code;
   state_set(STATE_ERROR);
 }
 
-const char *state_response_text(void) { return s_response; }
-void state_set_response(char *owned_text) {
-  if (s_response) free(s_response);
-  s_response = owned_text;
-}
-
-const char *state_user_text(void) { return s_user_text ? s_user_text : ""; }
-void state_set_user_text(const char *text) {
-  if (s_user_text) {
-    free(s_user_text);
-    s_user_text = NULL;
-  }
-  if (!text) return;
-  size_t n = strlen(text);
-  s_user_text = malloc(n + 1);
-  if (s_user_text) {
-    memcpy(s_user_text, text, n);
-    s_user_text[n] = '\0';
-  }
-}
+int  state_dictation_status(void) { return s_dictation_status; }
+void state_set_dictation_status(int status) { s_dictation_status = status; }
 
 FontChoice state_font(void) { return s_font; }
 void state_set_font(FontChoice f) { s_font = f; }
-
-int  state_dictation_status(void) { return s_dictation_status; }
-void state_set_dictation_status(int status) { s_dictation_status = status; }
 const char *state_font_key(void) {
   return s_font == FONT_LARGE ? FONT_KEY_GOTHIC_28 : FONT_KEY_GOTHIC_24;
+}
+
+// --- turn ring ---------------------------------------------------------
+
+int state_turn_count(void) { return s_turn_count; }
+
+const Turn *state_turn_at(int idx) {
+  if (idx < 0 || idx >= s_turn_count) return NULL;
+  return &s_turns[idx];
+}
+
+void state_set_pending_user_text(const char *text) {
+  if (s_pending_user) { free(s_pending_user); s_pending_user = NULL; }
+  s_pending_user = dup_str(text);
+}
+
+const char *state_pending_user_text(void) {
+  return s_pending_user ? s_pending_user : "";
+}
+
+void state_commit_turn(char *owned_ai_text) {
+  if (s_turn_count == MAX_TURNS) {
+    // Evict the oldest by shifting the array left by one. MAX_TURNS is
+    // small (8) so memmove of pointers is cheap; no need for a head index.
+    free_turn(&s_turns[0]);
+    memmove(&s_turns[0], &s_turns[1], sizeof(Turn) * (MAX_TURNS - 1));
+    s_turn_count--;
+  }
+  Turn *t = &s_turns[s_turn_count++];
+  t->user = s_pending_user;  // take ownership
+  s_pending_user = NULL;
+  t->ai = owned_ai_text;     // take ownership
+}
+
+void state_clear_turns(void) {
+  for (int i = 0; i < s_turn_count; i++) free_turn(&s_turns[i]);
+  s_turn_count = 0;
+  if (s_pending_user) { free(s_pending_user); s_pending_user = NULL; }
 }

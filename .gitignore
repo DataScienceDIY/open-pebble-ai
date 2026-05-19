@@ -3,6 +3,9 @@
 # scripts/inject-config-defaults.sh. Should never be committed.
 src/pkjs/config_defaults.js
 build/
+# Diagnostic reports from scripts/api-testbench.js (contain prompts +
+# raw model responses; size-and-noise reasons to keep out of git).
+appstore/diagnostics/
 .lock-waf_*
 .pebble-cache/
 *.pbw

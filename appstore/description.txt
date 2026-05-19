@@ -1,6 +1,8 @@
-Open Pebble AI puts a personal LLM on your wrist. Press SELECT, speak your question, and read the answer in chat bubbles.
+Open Pebble AI brings your self-hosted LLM to your wrist. Press SELECT, speak your question, and read the answer in chat bubbles.
 
-The watch app is a thin client — your phone forwards the dictated text to any OpenAI-compatible chat-completions endpoint (OpenWebUI, vLLM, llama.cpp's server, LM Studio, Groq, OpenRouter, OpenAI itself, etc.), then sends the reply back. Supports multi-turn conversation within a session: tap SELECT from the response screen to ask a follow-up.
+NOTE: YOU NEED YOUR OWN SELF-HOSTED LLM OR AN API KEY TO USE THIS APP!.
+
+The watch app is a thin client, your phone forwards the dictated text to any OpenAI-compatible chat-completions endpoint (OpenWebUI, vLLM, llama.cpp's server, LM Studio, Groq, OpenRouter, OpenAI itself, etc.), then sends the reply back. Supports multi-turn conversation within a session: tap SELECT from the response screen to ask a follow-up.
 
 Configuration lives in the Pebble Core companion app — server URL, API key, model, font size. Long-press BACK from any screen to start a fresh chat.
 
