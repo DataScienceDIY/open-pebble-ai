@@ -29,6 +29,10 @@ var HTML =
 '<div><button id="loadModels" class="secondary" type="button">Load models</button></div></div>' +
 '<label>System prompt<textarea id="systemPrompt"></textarea></label>' +
 '<a href="#" id="resetPrompt">Reset to default</a>' +
+'<label>Font size<select id="fontSize">' +
+'<option value="medium">Medium (default)</option>' +
+'<option value="large">Large</option>' +
+'</select></label>' +
 '<div class="row" style="margin-top:1em">' +
 '<button id="test" class="secondary" type="button">Test connection</button>' +
 '<button id="save" type="button">Save</button>' +
@@ -44,6 +48,7 @@ var HTML =
 '$("apiKey").value=cur.apiKey||"";' +
 '$("model").value=cur.model||"";' +
 '$("systemPrompt").value=cur.systemPrompt||DEFAULT_PROMPT;' +
+'$("fontSize").value=cur.fontSize||"medium";' +
 '$("resetPrompt").addEventListener("click",function(e){e.preventDefault();$("systemPrompt").value=DEFAULT_PROMPT});' +
 'function authHeader(){var k=$("apiKey").value.trim();return k?{Authorization:"Bearer "+k}:{}}' +
 'function url(path){return $("serverUrl").value.replace(/\\/$/,"")+path}' +
@@ -60,7 +65,7 @@ var HTML =
 'body:JSON.stringify({model:$("model").value,messages:[{role:"user",content:"ping"}],stream:false})})' +
 '.then(function(r){setStatus("HTTP "+r.status+(r.ok?" OK":" — check key/model"))}).catch(function(e){setStatus("Failed: "+e.message)})});' +
 '$("save").addEventListener("click",function(){' +
-'var cfg={serverUrl:$("serverUrl").value.trim(),apiKey:$("apiKey").value,model:$("model").value.trim(),systemPrompt:$("systemPrompt").value};' +
+'var cfg={serverUrl:$("serverUrl").value.trim(),apiKey:$("apiKey").value,model:$("model").value.trim(),systemPrompt:$("systemPrompt").value,fontSize:$("fontSize").value};' +
 'location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify(cfg))});' +
 '</script></body></html>';
 

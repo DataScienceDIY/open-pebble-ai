@@ -23,7 +23,8 @@
       "ResponseChunkTotal",
       "ResponseChunkText",
       "ErrorCode",
-      "ConversationReset"
+      "ConversationReset",
+      "FontSize"
     ],
     "resources": {
       "media": []

@@ -36,6 +36,21 @@ pebble logs --emulator emery
 Then in the emulator: press **SELECT** → dictation modal fakes the canned
 transcription → spinner → response renders.
 
+### Fake dictation for the emulator
+
+`dev-watch.sh` builds with `OWUI_DEBUG=1`, which compiles a short-circuit
+inside `dictation_start()` that injects a canned utterance instead of opening
+the dictation modal. This is the primary way to exercise the app in the
+emulator — `pebble transcribe` is kept running as a fallback for when you
+need to test real dictation callbacks (status codes, failure modes).
+
+```bash
+# Standalone debug build (no hot-reload):
+OWUI_DEBUG=1 pebble build && pebble install --emulator emery
+```
+
+Never install a debug build to real hardware — the utterance is hardcoded.
+
 ## Configuration
 
 The first time the app runs (real hardware), open it from the Pebble companion

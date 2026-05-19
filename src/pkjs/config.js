@@ -10,6 +10,7 @@ function defaults() {
     apiKey: '',
     model: '',
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
+    fontSize: 'medium',  // 'medium' | 'large'
   };
 }
 
@@ -28,7 +29,12 @@ function load() {
     apiKey:       cached.apiKey       || d.apiKey,
     model:        cached.model        || d.model,
     systemPrompt: cached.systemPrompt || d.systemPrompt,
+    fontSize:     cached.fontSize     || d.fontSize,
   };
+}
+
+function fontSizeCode(fontSize) {
+  return fontSize === 'large' ? 1 : 0;  // matches FontChoice in src/c/state.h
 }
 
 function save(cfg) {
@@ -44,4 +50,5 @@ module.exports = {
   defaults: defaults,
   load: load,
   save: save,
+  fontSizeCode: fontSizeCode,
 };

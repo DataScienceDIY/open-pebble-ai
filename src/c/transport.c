@@ -1,4 +1,5 @@
 #include "transport.h"
+#include "state.h"
 #include <string.h>
 
 static TransportResponseHandler s_on_response = NULL;
@@ -41,6 +42,14 @@ static void send_chunk_ack(int idx) {
 }
 
 static void inbox_received(DictionaryIterator *iter, void *context) {
+  // FontSize is a one-off config push from PKJS; can arrive with or without
+  // a chunk payload alongside, so check it independently.
+  Tuple *font_t = dict_find(iter, MESSAGE_KEY_FontSize);
+  if (font_t) {
+    int v = (int)font_t->value->int32;
+    state_set_font(v == 1 ? FONT_LARGE : FONT_MEDIUM);
+  }
+
   Tuple *err_t = dict_find(iter, MESSAGE_KEY_ErrorCode);
   if (err_t) {
     free_buffer();
@@ -51,6 +60,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   Tuple *idx_t = dict_find(iter, MESSAGE_KEY_ResponseChunkIndex);
   Tuple *tot_t = dict_find(iter, MESSAGE_KEY_ResponseChunkTotal);
   Tuple *txt_t = dict_find(iter, MESSAGE_KEY_ResponseChunkText);
+  // FontSize-only messages (or any non-chunk push) end here.
   if (!idx_t || !tot_t || !txt_t) return;
 
   int idx = idx_t->value->int32;

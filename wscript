@@ -3,6 +3,7 @@
 #
 # Feel free to customize this to your needs.
 #
+import os
 import os.path
 
 top = '.'
@@ -21,6 +22,14 @@ def configure(ctx):
     Universal configuration: add your change prior to calling ctx.load('pebble_sdk').
     """
     ctx.load('pebble_sdk')
+
+    # OWUI_DEBUG=1 in the environment enables the in-app fake-dictation
+    # short-circuit (see src/c/dictation.c). Emulator-only — the canned
+    # utterance is fixed at compile time, so never ship a debug build.
+    if os.environ.get('OWUI_DEBUG'):
+        for env_name in ctx.all_envs:
+            ctx.all_envs[env_name].append_value(
+                'DEFINES', 'OWUI_DEBUG_FAKE_DICTATION=1')
 
 
 def build(ctx):

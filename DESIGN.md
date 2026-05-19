@@ -28,12 +28,14 @@ Single `AppState` enum in C; every transition routes through one `update_ui_for_
 
 | State | Display | UP | SELECT | DOWN | BACK | Long-BACK |
 |---|---|---|---|---|---|---|
-| `STATE_IDLE` | "Hold SELECT to speak" + turn counter | — | start dictation | — | exit app | reset conversation |
+| `STATE_IDLE` | Large centered "Hold SELECT to speak" + "Long BACK = new chat" footer | — | start dictation | — | exit app | reset conversation |
 | `STATE_DICTATING` | Pebble's built-in dictation modal | — | — | — | (handled by dictation API) | — |
-| `STATE_SENDING` | Spinner + "Sending…" | — | — | — | cancel → IDLE | — |
-| `STATE_WAITING` | Spinner + "Thinking…" + elapsed seconds | — | — | — | cancel → IDLE (orphan reply in JS) | — |
-| `STATE_SHOWING` | `ScrollLayer` with response text | scroll up | start next turn (re-enter DICTATING) | scroll down | → IDLE (keeps conversation) | reset conversation |
+| `STATE_SENDING` | Spinner + "Sending…" + "BACK to cancel" footer | — | — | — | cancel → IDLE | — |
+| `STATE_WAITING` | Spinner + "Thinking…" + elapsed seconds + "BACK to cancel" footer | — | — | — | cancel → IDLE (orphan reply in JS) | — |
+| `STATE_SHOWING` | Chat bubbles in a `ScrollLayer`: user utterance (blue border, right-aligned) on top, AI response (orange border, left-aligned) below | scroll up | start next turn (re-enter DICTATING) | scroll down | → IDLE (keeps conversation) | reset conversation |
 | `STATE_ERROR` | Short message + "BACK to dismiss" | — | retry last turn | — | → IDLE | — |
+
+`update_ui_for_state()` is responsible for keeping the window stack linear: when transitioning into a state, it pops any windows that aren't owned by that state. This is important for the SHOWING→DICTATING→SENDING transition — without an explicit `ui_response_hide()`, the response window would remain on top of the spinner. Each `ui_*_show()` is idempotent; each `ui_*_hide()` is a no-op when the window isn't on the stack.
 
 **New turn vs. new conversation.** SELECT from `SHOWING` is a follow-up turn; JS appends to the existing `messages` array. Long-pressing BACK (700ms) sends `ResetConversation` to JS, which truncates `messages` back to just the system prompt and resets the watch's turn counter. IDLE footer reads "Long BACK = new chat".
 
@@ -83,6 +85,9 @@ JS → Watch:
 - `ResponseChunkText` (string) — payload
 - `ErrorCode` (int) — enum (see §4)
 - `ConversationReset` (int) — JS-initiated resync
+- `FontSize` (int) — one-off config push: 0 = medium (GOTHIC_24), 1 = large (GOTHIC_28). Sent on `ready` and on every `webviewclosed` so a config change takes effect on the next render. Carried independently of chunk payloads.
+
+**LLM output sanitization.** Before chunking, JS strips characters Pebble's system fonts can't render (smart quotes, em-dashes, ellipses, bullets, non-breaking spaces, zero-width joiners). Targeted replacements substitute ASCII equivalents where meaningful (em-dash → hyphen, curly quote → straight); anything still outside ASCII printable + LF + tab is dropped. See `sanitizeForPebble()` in `pkjs/chunker.js`.
 
 **Watch→JS upload.** Single AppMessage. Dictation transcriptions are bounded by our 1024-byte capture buffer (well under the 8 KB outbox).
 
@@ -127,6 +132,7 @@ All errors land in `STATE_ERROR` with a single-line message. `ErrorCode` is an e
 - **API key** — password input
 - **Model ID** — text input by default; a "Load models" button calls `GET {url}/api/models` and replaces it with a `<select>` populated from response `id` fields
 - **System prompt** — multi-line textarea, pre-filled with the default `"Keep responses very brief, a couple sentences at most. The user is reading this on a tiny smartwatch screen."` A small "Reset to default" link clears any override.
+- **Font size** — select with "Medium" (default, GOTHIC_24) and "Large" (GOTHIC_28). The choice is pushed to the watch via the `FontSize` AppMessage key (see §3) and takes effect on the next render.
 - **Test connection** — button that sends a one-shot `messages: [{"role":"user","content":"ping"}]` request and shows the HTTP status inline.
 
 **Round-trip:** opened via `Pebble.openURL(configUrl + '?current=' + encodeURIComponent(JSON.stringify(current)))`. On submit, the page redirects to `pebblejs://close#` with the JSON-encoded settings. JS receives in `webviewclosed`, persists to `localStorage` under key `owui_config`.
@@ -241,6 +247,16 @@ This phase-2 work is explicitly **out of scope for the initial release** but is 
 
 **(e) System prompt counted toward context.** A long custom system prompt eats context window the same as conversation turns. For self-hosted Ollama with 2k–8k context windows this can bite. Document in the config page: "Long system prompts reduce how much conversation the model can remember."
 
+**(f) ScrollLayer click-config nesting crashes the emery emulator.** The textbook Pebble pattern is to call `scroll_layer_set_click_config_onto_window()` from inside your own `click_config_provider`. On the 2026 emery firmware/emulator that re-entrant click-setup faults at PC 0x3666d. The workaround used in `ui_response.c`: don't install a click_config_provider in `ui_response_init`; instead, in `window_load` (where `s_scroll_layer` is guaranteed non-NULL) call `scroll_layer_set_click_config_onto_window()` directly, then layer our SELECT/BACK provider on top via `window_set_click_config_provider()`. The order matters — calling our provider first and then having it invoke the scroll layer's setup is what triggers the crash. UP/DOWN scrolling and SELECT/BACK both work via this split.
+
+**(g) Pebble fonts have a sparse Unicode coverage.** LLM output frequently contains characters (em-dash, curly quotes, ellipsis, NBSP) that render as empty boxes on the watch. `pkjs/chunker.js::sanitizeForPebble()` substitutes ASCII equivalents and strips the rest before chunking. The user's dictated text is ASCII (Pebble dictation API output) so no symmetric sanitization is needed on the watch side.
+
+**(h) `pebble emu-button -d N click back` does not produce a real long-press in the emery emulator.** Holding a button via `pebble emu-button push back; sleep; pebble emu-button release back` also doesn't fire `window_long_click_subscribe()` handlers. Long-BACK works on real hardware. The state-machine harness omits a long-BACK scenario because of this; conversation-reset coverage requires either a real device or the in-app reset to be exposed via a debug UI.
+
+**(i) pypkjs's `removeEventListener` has a typo that breaks multi-turn.** In `pypkjs/javascript/events.py` the inner `del listener[i]` should read `del self.__listeners[event][i]` — instead it tries to delete an integer index on the JSFunction itself and throws a Python TypeError. The throw propagates back into JS, aborting whatever was calling `removeEventListener`. If that caller was a chunker `cleanup()` triggered from the last-chunk ack path, `onComplete()` never runs and the JS `inflight` flag stays true; every subsequent `UserMessage` then bounces with `ERR_BUSY` and the watch waits forever. Worked around in `pkjs/chunker.js`: set `done` and call `onComplete()` before the throw-prone `removeEventListener`, wrap that call in try/catch, and gate the listener with `done` so a stale subscription is inert. Patching the pypkjs typo upstream is the correct long-term fix.
+
+**(j) `pkill -f 'qemu-pebble|pypkjs'` self-kills any shell whose command line contains those patterns.** The kill script must avoid putting the patterns in its own argv. The dev scripts use `pidof qemu-pebble` (binary-name match, no cmdline scan) and iterate `pidof python*` filtering by `/proc/$pid/cmdline` for pypkjs — both approaches that don't trip on the matching pattern being literally present in the harness's own shell command.
+
 ---
 
 ## 9. Sidecar development environment
@@ -284,11 +300,16 @@ pebble logs --emulator emery        # live tail of APP_LOG output
 
 **Critical:** the emulator's PebbleKit JS process runs in node, with full XHR support — so the phone-side logic runs end-to-end against the local OWUI container with **no real phone required**. This is the workflow that gets used 95% of the time.
 
-**Dictation in the emulator.** The emulator does not have a microphone. `pebble-tool` exposes `pebble transcribe`, which runs a persistent voice server: while it's up, every `dictation_session_start()` call from the watch app returns the same canned text passed as the positional arg. Failure modes are simulated with `--error {connectivity,disabled,no-speech-detected}`.
+**Dictation in the emulator.** The emulator does not have a microphone. Two mechanisms cover this:
 
-**Hot-reload script.** `scripts/dev-watch.sh` runs `pebble transcribe` in the background and rebuilds + reinstalls on source change:
+1. **In-app fake-dictation short-circuit (primary).** Building with `OWUI_DEBUG=1 pebble build` defines the `OWUI_DEBUG_FAKE_DICTATION` macro. With it set, `dictation_start()` in `src/c/dictation.c` bypasses the dictation API entirely and feeds a canned utterance directly to the done-callback. No external voice server, no microphone, no dependency on `pebble transcribe`. This is the path used by the inner-loop hot-reload script and by the state-machine test harness (§9.6). The canned text is fixed at compile time, so debug builds are emulator-only — never install one to a paired watch.
+2. **`pebble transcribe` (fallback / dictation-callback coverage).** `pebble-tool` ships a persistent voice server: while it's up, every `dictation_session_start()` call returns the same canned text passed as the positional arg. Failure modes are simulated with `--error {connectivity,disabled,no-speech-detected}`. Used to test the dictation-callback path itself — status enum handling, error transitions — which the in-app short-circuit deliberately skips.
+
+**Hot-reload script.** `scripts/dev-watch.sh` exports `OWUI_DEBUG=1`, builds, and rebuilds + reinstalls on source change. It also starts `pebble transcribe` in the background so a developer who rebuilds without `OWUI_DEBUG` (e.g. to test the real dictation callback) still gets canned input:
 
 ```bash
+export OWUI_DEBUG=1
+pebble build && pebble install --emulator emery
 pebble transcribe --emulator emery "what is the capital of france" &
 fswatch -o src/ package.json | while read; do
   pebble build && pebble install --emulator emery
@@ -321,17 +342,20 @@ For a LAN OWUI, the config page's "Server URL" field gets the dev machine's LAN 
 
 | Test concern | Emulator | Hardware |
 |---|---|---|
-| State machine transitions | ✓ | ✓ |
+| State machine transitions | ✓ (debug build + harness, §9.6) | ✓ |
 | Chunk reassembly / `ChunkAck` | ✓ | ✓ |
 | OpenWebUI request shape | ✓ | ✓ |
 | System prompt prepending | ✓ | ✓ |
-| Multi-turn conversation | ✓ | ✓ |
+| Multi-turn conversation | ✓ (debug build, rotating utterances) | ✓ |
 | Error handling (network, 401, 5xx, timeout) | ✓ (mock with a `scripts/fake-owui.py` flask shim that returns chosen status) | partial |
-| Dictation status 5 (ConnectivityError) | turn off emulator phone-sim | turn off Bluetooth |
+| Dictation status 5 (ConnectivityError) | `pebble transcribe --error connectivity` (release build) | turn off Bluetooth |
+| Dictation callback paths (success/failure/abort) | ✓ (release build + `pebble transcribe`) | ✓ |
 | Real heap pressure | ✗ | ✓ |
 | Microphone quality / accent handling | ✗ | ✓ |
 | Config webview round-trip through Pebble app | ✗ | ✓ |
 | BT transport flakiness | ✗ | ✓ |
+
+Two binaries cover the matrix: a debug build (`OWUI_DEBUG=1`) for state-machine and integration coverage with deterministic input, and a release build with `pebble transcribe` for the dictation-callback paths that the short-circuit bypasses.
 
 ### 9.5 Repo additions for the dev environment
 

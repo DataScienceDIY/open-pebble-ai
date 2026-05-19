@@ -15,3 +15,9 @@ void dictation_init(DictationDoneHandler on_done, DictationFailHandler on_fail);
 void dictation_deinit(void);
 
 void dictation_start(void);
+
+#ifdef OWUI_DEBUG_FAKE_DICTATION
+// Resets the cycling-utterance index so the next call replays "turn 1". Hooked
+// to ResetConversation/long-BACK so the harness can run repeated scenarios.
+void dictation_debug_reset(void);
+#endif

@@ -61,8 +61,13 @@ function handleUserMessage(text) {
   });
 }
 
+function pushFontSize(cfg) {
+  Pebble.sendAppMessage({ FontSize: config.fontSizeCode(cfg.fontSize) });
+}
+
 Pebble.addEventListener('ready', function () {
   console.log('owui pkjs ready');
+  pushFontSize(config.load());
 });
 
 Pebble.addEventListener('appmessage', function (e) {
@@ -94,6 +99,7 @@ Pebble.addEventListener('webviewclosed', function (e) {
     if (conversation && conversation.length > 0) {
       conversation[0] = { role: 'system', content: cfg.systemPrompt || '' };
     }
+    pushFontSize(cfg);  // takes effect on next render
   } catch (err) {
     console.log('webviewclosed parse failed: ' + err);
   }

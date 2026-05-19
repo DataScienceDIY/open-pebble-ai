@@ -20,6 +20,7 @@ static OwuiErrorCode dictation_status_to_error(int status) {
 }
 
 static void on_dictation_done(const char *utterance) {
+  state_set_user_text(utterance);  // snapshot for the response window
   state_set(STATE_SENDING);
   transport_send_utterance(utterance);
   state_set(STATE_WAITING);

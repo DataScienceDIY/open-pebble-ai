@@ -7,6 +7,7 @@
 static Window *s_window = NULL;
 static TextLayer *s_message_layer = NULL;
 static TextLayer *s_elapsed_layer = NULL;
+static TextLayer *s_hint_layer = NULL;
 static AppTimer *s_tick_timer = NULL;
 static int s_elapsed_secs = 0;
 static char s_message_buf[32];
@@ -43,13 +44,21 @@ static void window_load(Window *window) {
   text_layer_set_text_alignment(s_elapsed_layer, GTextAlignmentCenter);
   text_layer_set_font(s_elapsed_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   layer_add_child(root, text_layer_get_layer(s_elapsed_layer));
+
+  s_hint_layer = text_layer_create(GRect(0, bounds.size.h - 22, bounds.size.w, 20));
+  text_layer_set_text(s_hint_layer, "BACK to cancel");
+  text_layer_set_text_alignment(s_hint_layer, GTextAlignmentCenter);
+  text_layer_set_font(s_hint_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  layer_add_child(root, text_layer_get_layer(s_hint_layer));
 }
 
 static void window_unload(Window *window) {
   if (s_message_layer) text_layer_destroy(s_message_layer);
   if (s_elapsed_layer) text_layer_destroy(s_elapsed_layer);
+  if (s_hint_layer)    text_layer_destroy(s_hint_layer);
   s_message_layer = NULL;
   s_elapsed_layer = NULL;
+  s_hint_layer = NULL;
 }
 
 void ui_spinner_init(void) {
