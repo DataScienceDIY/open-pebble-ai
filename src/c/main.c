@@ -27,11 +27,15 @@ static void on_dictation_done(const char *utterance) {
 }
 
 static void on_dictation_fail(int status) {
+  APP_LOG(APP_LOG_LEVEL_WARNING, "dictation_fail: status=%d", status);
   if (status == DictationSessionStatusFailureSystemAborted) {
     // User pressed cancel in the dictation modal; silent return to IDLE.
     state_set(STATE_IDLE);
     return;
   }
+  // Bake the raw status into the displayed error so a user reporting it
+  // back can identify which failure path fired without needing log access.
+  state_set_dictation_status(status);
   state_set_error(dictation_status_to_error(status));
 }
 

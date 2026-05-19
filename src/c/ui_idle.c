@@ -36,10 +36,25 @@ static const char *error_text_for(OwuiErrorCode code) {
 
 static void refresh_text(void) {
   if (state_current() == STATE_ERROR) {
-    snprintf(s_body_buf, sizeof(s_body_buf), "%s", error_text_for(state_last_error()));
+    OwuiErrorCode code = state_last_error();
+    int dict_status = state_dictation_status();
+    if (dict_status != 0 &&
+        (code == ERR_RECOGNITION_FAILED || code == ERR_NO_SPEECH ||
+         code == ERR_PHONE_DISCONNECTED)) {
+      // Show the raw dictation status code beside the message so users can
+      // report which failure mode the platform is returning. e.g.
+      //   "Could not transcribe (status 4)"
+      snprintf(s_body_buf, sizeof(s_body_buf), "%s\n(status %d)",
+               error_text_for(code), dict_status);
+    } else {
+      snprintf(s_body_buf, sizeof(s_body_buf), "%s", error_text_for(code));
+    }
     snprintf(s_footer_buf, sizeof(s_footer_buf), "SELECT: retry  BACK: dismiss");
   } else {
-    snprintf(s_body_buf, sizeof(s_body_buf), "Hold SELECT to speak");
+    // Pebble's dictation modal is system-owned: it opens on SELECT and uses
+    // tap-to-start / tap-to-stop in the modal itself. We can't make it
+    // hold-to-talk, so the label matches what actually happens.
+    snprintf(s_body_buf, sizeof(s_body_buf), "Press SELECT to talk");
     snprintf(s_footer_buf, sizeof(s_footer_buf), "Long BACK = new chat");
   }
   // Layers may not exist yet on the first call (window_load runs after the

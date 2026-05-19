@@ -4,13 +4,21 @@ var DEFAULT_SYSTEM_PROMPT =
 
 var STORAGE_KEY = 'owui_config';
 
+// Build-time overrides written from .env.local by
+// scripts/inject-config-defaults.sh. Empty in fresh checkouts; the developer
+// runs the injector before `pebble build` to bake their own defaults in.
+var BAKED = (function () {
+  try { return require('./config_defaults') || {}; }
+  catch (e) { return {}; }
+})();
+
 function defaults() {
   return {
-    serverUrl: '',
-    apiKey: '',
-    model: '',
-    systemPrompt: DEFAULT_SYSTEM_PROMPT,
-    fontSize: 'medium',  // 'medium' | 'large'
+    serverUrl:    BAKED.serverUrl    || '',
+    apiKey:       BAKED.apiKey       || '',
+    model:        BAKED.model        || '',
+    systemPrompt: BAKED.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+    fontSize:     BAKED.fontSize     || 'medium',  // 'medium' | 'large'
   };
 }
 

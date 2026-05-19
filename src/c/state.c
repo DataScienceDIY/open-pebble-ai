@@ -12,6 +12,7 @@ static OwuiErrorCode s_last_error = ERR_NONE;
 static char *s_response = NULL;
 static char *s_user_text = NULL;
 static FontChoice s_font = FONT_MEDIUM;
+static int s_dictation_status = 0;
 
 static void update_ui_for_state(AppState s) {
   // Each state owns one window. Pop the others to keep the window stack
@@ -115,6 +116,9 @@ void state_set_user_text(const char *text) {
 
 FontChoice state_font(void) { return s_font; }
 void state_set_font(FontChoice f) { s_font = f; }
+
+int  state_dictation_status(void) { return s_dictation_status; }
+void state_set_dictation_status(int status) { s_dictation_status = status; }
 const char *state_font_key(void) {
   return s_font == FONT_LARGE ? FONT_KEY_GOTHIC_28 : FONT_KEY_GOTHIC_24;
 }

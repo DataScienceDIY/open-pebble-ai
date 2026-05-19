@@ -25,6 +25,12 @@ void state_reset_turns(void);
 OwuiErrorCode state_last_error(void);
 void state_set_error(OwuiErrorCode code);
 
+// Optional context the error screen can surface — the raw Pebble dictation
+// status code that triggered ERR_RECOGNITION_FAILED / ERR_NO_SPEECH /
+// ERR_PHONE_DISCONNECTED. 0 = no specific status available.
+int state_dictation_status(void);
+void state_set_dictation_status(int status);
+
 const char *state_response_text(void);
 void state_set_response(char *owned_text);  // takes ownership; freed on next set or deinit
 

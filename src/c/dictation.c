@@ -74,6 +74,15 @@ void dictation_start(void) {
   }
   s_session = dictation_session_create(MAX_UTTERANCE, dictation_callback, NULL);
   if (s_session) {
+    // Skip the post-dictation confirmation screen — without this the user
+    // has to tap SELECT a second time to accept the transcription before
+    // our callback fires.
+    dictation_session_enable_confirmation(s_session, false);
+    // Keep the system error dialogs ON for now. They sometimes carry
+    // actionable platform-level diagnostics (e.g. "voice service not
+    // available, please configure dictation in the Pebble app") that we
+    // can't see from our generic ERR_RECOGNITION_FAILED enum.
+    dictation_session_enable_error_dialogs(s_session, true);
     dictation_session_start(s_session);
   } else if (s_on_fail) {
     s_on_fail(-1);

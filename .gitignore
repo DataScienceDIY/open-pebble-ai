@@ -1,4 +1,7 @@
 .env.local
+# Build-time baked secrets — generated from .env.local by
+# scripts/inject-config-defaults.sh. Should never be committed.
+src/pkjs/config_defaults.js
 build/
 .lock-waf_*
 .pebble-cache/

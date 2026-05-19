@@ -1,7 +1,13 @@
+var Clay = require('@rebble/clay');
+var clayConfig = require('./clay_config');
 var config = require('./config');
 var owui = require('./owui');
 var chunker = require('./chunker');
-var configHtml = require('./config_html');
+
+// autoHandleEvents: false — we attach our own showConfiguration and
+// webviewclosed listeners so submitted values go into PKJS localStorage
+// (not pushed to the watch via AppMessage with unregistered keys).
+var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
 
 // In-memory conversation; reset on app exit, on ResetConversation, or on
 // system-prompt change in the config page.
@@ -86,13 +92,33 @@ Pebble.addEventListener('appmessage', function (e) {
 });
 
 Pebble.addEventListener('showConfiguration', function () {
-  Pebble.openURL(configHtml.dataUrl(config.load()));
+  // Pre-seed Clay's form with current values so the user sees what's set.
+  // clay.generateUrl() bakes in clay.meta + current values from
+  // localStorage; we ensure localStorage has the merged result of baked
+  // defaults + any prior settings.
+  var current = config.load();
+  // Clay reads its initial values from localStorage by messageKey, so
+  // mirror our config keys there before opening the page.
+  for (var k in current) {
+    if (current.hasOwnProperty(k)) {
+      try { localStorage.setItem('clay-settings:' + k, JSON.stringify(current[k])); } catch (e) {}
+    }
+  }
+  Pebble.openURL(clay.generateUrl());
 });
 
 Pebble.addEventListener('webviewclosed', function (e) {
   if (!e || !e.response) return;
   try {
-    var cfg = JSON.parse(decodeURIComponent(e.response));
+    // Clay returns { messageKey: { value: x } }; getSettings with convert=false
+    // preserves that shape (otherwise it tries to map to AppMessage int keys).
+    var settings = clay.getSettings(e.response, false);
+    var cfg = config.load();  // start from current baked + saved defaults
+    for (var k in settings) {
+      if (settings.hasOwnProperty(k) && settings[k] && 'value' in settings[k]) {
+        cfg[k] = settings[k].value;
+      }
+    }
     config.save(cfg);
     // System-prompt change: rebuild messages[0] in place so subsequent turns
     // use the new instruction without losing in-progress conversation.
