@@ -1,0 +1,32 @@
+{
+  "name": "open-pebble-ai",
+  "author": "",
+  "version": "0.1.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Open Pebble AI",
+    "uuid": "1660488c-2553-4f43-a469-633b2b48f105",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": ["emery"],
+    "watchapp": {
+      "watchface": false
+    },
+    "messageKeys": [
+      "UserMessage",
+      "ResetConversation",
+      "CancelInflight",
+      "ChunkAck",
+      "ResponseChunkIndex",
+      "ResponseChunkTotal",
+      "ResponseChunkText",
+      "ErrorCode",
+      "ConversationReset"
+    ],
+    "resources": {
+      "media": []
+    }
+  }
+}

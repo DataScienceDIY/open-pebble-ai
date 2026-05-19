@@ -1,0 +1,10 @@
+.env.local
+build/
+.lock-waf_*
+.pebble-cache/
+*.pbw
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+pebble_screenshot_*.png
