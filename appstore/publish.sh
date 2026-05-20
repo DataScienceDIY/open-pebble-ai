@@ -7,10 +7,9 @@
 #   - You're signed in to the Pebble appstore via pebble-tool (set
 #     PEBBLE_FIREBASE_ID_TOKEN, or omit --firebase-id-token for an
 #     interactive login flow).
-#   - A release-quality .pbw is built (`./scripts/inject-config-defaults.sh
-#     --clear && pebble build`). The --clear is important: you don't want
-#     to ship your own .env.local API key in the bundle that lands in
-#     other users' watches.
+#   - A release-quality .pbw is built (`./scripts/release.sh`). That script
+#     clears the baked .env.local API key so the bundle landing on other
+#     users' watches doesn't carry your personal credential.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -40,8 +39,7 @@ if grep -q '"apiKey": "sk-' src/pkjs/config_defaults.js 2>/dev/null; then
   cat >&2 <<'WARN'
 WARNING: src/pkjs/config_defaults.js looks like it has a baked API key.
         Publishing this would ship your personal credential to every user.
-        Run `./scripts/inject-config-defaults.sh --clear && pebble build`
-        before publishing.
+        Run `./scripts/release.sh` before publishing.
 WARN
   exit 1
 fi

@@ -1,5 +1,6 @@
 var Clay = require('@rebble/clay');
 var clayConfig = require('./clay_config');
+var clayTextarea = require('./clay_textarea');
 var config = require('./config');
 var owui = require('./owui');
 var chunker = require('./chunker');
@@ -8,6 +9,9 @@ var chunker = require('./chunker');
 // webviewclosed listeners so submitted values go into PKJS localStorage
 // (not pushed to the watch via AppMessage with unregistered keys).
 var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
+// Register before the page is built (Clay docs: components must be
+// registered prior to .build()). Lets clay_config.js use `type: 'textarea'`.
+clay.registerComponent(clayTextarea);
 
 // In-memory conversation; reset on app exit, on ResetConversation, or on
 // system-prompt change in the config page.

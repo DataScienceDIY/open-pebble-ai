@@ -2,5 +2,5 @@ Initial release.
 
 - Press SELECT to dictate a query; reply renders in chat bubbles.
 - Multi-turn conversation within a session.
-- Configurable OpenAI-compatible endpoint, API key, model, and font size via the Pebble Core settings page.
+- Configurable OpenWebUI-compatible endpoint, API key, model, system prompt, and font size via the Pebble Core settings page.
 - Pebble Time 2 (emery) only.

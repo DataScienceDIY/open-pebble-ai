@@ -8,10 +8,10 @@
 // pkjs/index.js) and save into localStorage ourselves, these don't need
 // to be registered in package.json's messageKeys list — only FontSize is.
 //
-// System Prompt is intentionally omitted: Clay's input element renders an
-// HTML <input>, not <textarea>, so multi-line entry doesn't work. The
-// system prompt is settable via scripts/inject-config-defaults.sh and is
-// rarely changed at runtime.
+// The `textarea` type is a custom component registered in pkjs/index.js
+// (see clay_textarea.js); Clay 1.0 only ships single-line <input>.
+
+var config = require('./config');
 
 module.exports = [
   {
@@ -88,6 +88,26 @@ module.exports = [
           { label: 'Medium', value: 'medium' },
           { label: 'Large', value: 'large' },
         ],
+      },
+    ],
+  },
+  {
+    type: 'section',
+    items: [
+      {
+        type: 'heading',
+        defaultValue: 'System prompt',
+        size: 4,
+      },
+      {
+        type: 'textarea',
+        messageKey: 'systemPrompt',
+        label: '',
+        description:
+          'Prepended invisibly to every conversation. Keep it short — ' +
+          'long prompts eat tokens and watch screen space.',
+        defaultValue: config.DEFAULT_SYSTEM_PROMPT,
+        rows: 5,
       },
     ],
   },

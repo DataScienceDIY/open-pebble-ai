@@ -4,9 +4,9 @@ var DEFAULT_SYSTEM_PROMPT =
 
 var STORAGE_KEY = 'owui_config';
 
-// Build-time overrides written from .env.local by
-// scripts/inject-config-defaults.sh. Empty in fresh checkouts; the developer
-// runs the injector before `pebble build` to bake their own defaults in.
+// Build-time overrides. scripts/dev.sh bakes .env.local values here for
+// development; scripts/release.sh clears it to an empty object so no
+// secrets ship in published builds. Empty in fresh checkouts.
 var BAKED = (function () {
   try { return require('./config_defaults') || {}; }
   catch (e) { return {}; }

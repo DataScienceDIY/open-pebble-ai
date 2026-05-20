@@ -1,126 +1,132 @@
 # Open Pebble AI
 
 Pebble Time 2 watch app that captures a voice query via the built-in dictation
-API, sends it to an LLM endpoint, and displays the reply on the watch.
+API, sends it to an LLM endpoint, and displays the reply on the watch in chat
+bubbles. Multi-turn within a session; tap SELECT from a response to ask a
+follow-up.
 
-**Phase 1** ships with OpenWebUI as the backend. **Phase 2** opens the same
-client to any OpenAI-compatible endpoint (OpenAI, Groq, Together, OpenRouter,
-vLLM, llama.cpp, LM Studio, etc.) — see [DESIGN.md §7](DESIGN.md).
+Phase 1 ships with OpenWebUI as the backend. Phase 2 opens the same client to
+any OpenAI-compatible endpoint (OpenAI, Groq, OpenRouter, vLLM, llama.cpp, LM
+Studio, etc.).
 
-Design: see [DESIGN.md](DESIGN.md).
+## Setup
 
-## Day 1 — clone to working query in ~15 minutes
-
-Requires Linux/macOS, `docker`, `uv` (or another way to run Python 3.13).
+Requires Linux or macOS.
 
 ```bash
-# 1. Install the Pebble SDK.
+# 1. Install the Pebble SDK toolchain.
 uv tool install pebble-tool --python 3.13
 pebble sdk install latest
 
-# 2. Bring up the local OpenWebUI + Ollama stack.
-#    First run pulls the llama3.2:1b model (~1.3 GB).
-./scripts/dev-up.sh
+# 2. Create .env.local with your LLM endpoint (gitignored).
+cat > .env.local <<'EOF'
+OWUI_HOST=https://your-owui-host
+OWUI_KEY=sk-your-api-key
+OWUI_MODEL=your-model-id
+EMU_PLATFORM=emery
+EOF
 
-# 3. Build + install to the emulator, with hot reload on source change.
-#    First arg is the fake transcription used for SELECT in the emulator.
-./scripts/dev-watch.sh "what is the capital of france"
+# 3. Run the app in the emulator.
+./scripts/dev.sh
 ```
 
-In a separate terminal, tail logs:
+`uv` is the Python tooling launcher — install it from <https://docs.astral.sh/uv/>
+if you don't have it.
+
+## Scripts
+
+The `scripts/` folder holds exactly four:
+
+| Script | Purpose |
+|---|---|
+| `dev.sh` | Run the app in the emery emulator. Bakes `.env.local` config into the build, builds with `OWUI_DEBUG=1`, installs, and rebuilds on source change. |
+| `release.sh` | Build the publishable `.pbw`. Clears baked secrets, builds with real dictation, verifies no API key leaked. |
+| `make-banner.py` | Regenerate the 720x320 appstore banner (`appstore/banner.png`). |
+| `api-testbench.js` | Exercise an LLM endpoint and the response sanitizer across many iterations; writes a diagnostic report. |
+
+### Development loop
+
+`./scripts/dev.sh` builds with `OWUI_DEBUG=1`, which compiles a SELECT-in-IDLE
+short-circuit (`src/c/dictation.c`) that fires a canned utterance instead of
+opening the dictation modal — the emulator has no microphone. The script then
+boots the emulator, installs the app, and rebuilds + reinstalls on every change
+to `src/` or `package.json`. Ctrl-C stops it.
+
+Tail logs in another terminal:
 
 ```bash
 pebble logs --emulator emery
 ```
 
-Then in the emulator: press **SELECT** → dictation modal fakes the canned
-transcription → spinner → response renders.
-
-### Fake dictation for the emulator
-
-`dev-watch.sh` builds with `OWUI_DEBUG=1`, which compiles a short-circuit
-inside `dictation_start()` that injects a canned utterance instead of opening
-the dictation modal. This is the primary way to exercise the app in the
-emulator — `pebble transcribe` is kept running as a fallback for when you
-need to test real dictation callbacks (status codes, failure modes).
-
-```bash
-# Standalone debug build (no hot-reload):
-OWUI_DEBUG=1 pebble build && pebble install --emulator emery
-```
-
-Never install a debug build to real hardware — the utterance is hardcoded.
+A debug build is emulator-only — never sideload it onto a real watch, the
+utterance is hardcoded.
 
 ## Configuration
 
-The first time the app runs (real hardware), open it from the Pebble companion
-app and tap **Settings**. The config page asks for:
+The watch app is configured from the Pebble companion app's settings page
+(a Clay webview). It collects:
 
-- **Server URL** (e.g. `http://192.168.1.50:3000` for a LAN OWUI)
-- **API key** (`sk-...` from OWUI → Settings → Account → API keys). Blank is
-  fine when `WEBUI_AUTH=false` in dev.
-- **Model** (`llama3.2:1b`, etc). Hit **Load models** to populate from the
-  server — needs OWUI's `CORS_ALLOW_ORIGIN=*` (set in our dev compose file).
-- **System prompt** — prepended invisibly to every conversation. Defaults to
-  "Keep responses very brief, a couple sentences at most."
+- **Server URL** — e.g. `https://owui.example.com`.
+- **API key** — `sk-...`; leave blank for unauthenticated local servers.
+- **Model** — the model ID to request, e.g. `llama3.2`.
+- **Font size** — Medium or Large.
+- **System prompt** — prepended invisibly to every conversation; defaults to a
+  brevity instruction tuned for the small screen.
 
-In the emulator, the config page is reachable via
-`pebble emu-app-config --emulator emery`.
+For development, `scripts/dev.sh` bakes the `.env.local` values straight into
+the build (`src/pkjs/config_defaults.js`) so the emulator launches
+pre-configured without touching the settings page.
 
 ## Watch controls
 
 | Screen | Button | Action |
 |---|---|---|
 | IDLE | SELECT | start dictation |
-| IDLE | BACK (long) | reset conversation |
 | IDLE | BACK | exit app |
-| SHOWING response | UP / DOWN | scroll |
-| SHOWING response | SELECT | start follow-up turn |
-| SHOWING response | BACK | return to IDLE (keeps conversation) |
-| SHOWING response | BACK (long) | reset conversation |
+| SHOWING response | UP / DOWN | scroll (also drag on the touchscreen) |
+| SHOWING response | SELECT | start a follow-up turn |
+| SHOWING response | BACK | return to IDLE (keeps the conversation) |
 | SENDING / WAITING | BACK | cancel and return to IDLE |
-| ERROR | SELECT | retry last turn (TODO) |
-| ERROR | BACK | dismiss |
+
+The conversation resets when the app is relaunched.
 
 ## Real hardware
 
-```bash
-echo 'PHONE_IP=192.168.1.42' >> .env.local   # from Pebble app → Developer
-./scripts/dev-hardware.sh --follow
-```
-
-The phone needs the Pebble companion app installed with **Developer Connection**
-enabled. The phone and the OWUI server must be able to reach each other; if OWUI
-runs on your dev machine, use that machine's LAN IP (not `localhost`) in the
-Server URL.
-
-## Error-path testing
-
-`scripts/fake-owui.py` is a flask shim that returns chosen failure modes:
+Build a release `.pbw` and sideload it via the Pebble companion app:
 
 ```bash
-pip install flask
-python scripts/fake-owui.py 401      # bad API key
-python scripts/fake-owui.py 500      # server error
-python scripts/fake-owui.py timeout  # hangs forever → XHR timeout
-python scripts/fake-owui.py huge     # 50KB response → RESPONSE_TOO_LARGE
+./scripts/release.sh          # -> build/open-pebble-ai.pbw
 ```
 
-Point Server URL at `http://<dev-machine>:3001` to exercise.
+Copy `build/open-pebble-ai.pbw` to the phone and open it in the Pebble Core
+app to install onto a paired watch. The release build has real dictation and
+no baked credentials — configure it from the settings page after install.
+
+## Publishing
+
+See [appstore/README.md](appstore/README.md) for the appstore submission
+package and the `dev-portal.rebble.io` flow.
 
 ## Layout
 
 ```
 src/c/         watch app (C, Pebble SDK)
-src/pkjs/      phone-side JS proxy (XHR to OWUI, chunked AppMessage to watch)
-scripts/       dev environment helpers
-docker-compose.yml   OWUI + Ollama stack
-DESIGN.md      architecture reference
+src/pkjs/      phone-side JS proxy (XHR to the LLM, chunked AppMessage to watch)
+scripts/       dev / release / asset tooling
+appstore/      appstore submission package
 ```
 
 ## Caveat — Pebble Time 2 platform name
 
 `package.json` targets `emery` (the historical Pebble 2 platform ID). The
-2026 repebble PT2 may have a different identifier — if `pebble build` complains
+2026 repebble PT2 may use a different identifier — if `pebble build` complains
 about an unknown platform, swap it in `package.json` and `.env.local`'s
-`EMU_PLATFORM`. See DESIGN.md §6.
+`EMU_PLATFORM`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+## Feedback
+
+Bug reports, questions, feature requests: **datasciencediy.refutable156@passmail.net**

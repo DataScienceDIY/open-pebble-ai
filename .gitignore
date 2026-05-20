@@ -1,6 +1,6 @@
 .env.local
-# Build-time baked secrets — generated from .env.local by
-# scripts/inject-config-defaults.sh. Should never be committed.
+# Build-time baked secrets — generated from .env.local by scripts/dev.sh
+# (and cleared by scripts/release.sh). Should never be committed.
 src/pkjs/config_defaults.js
 build/
 # Diagnostic reports from scripts/api-testbench.js (contain prompts +
